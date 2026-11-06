@@ -1,36 +1,121 @@
-# This is a basic workflow to help you get started with Actions
+# GitHub Actions — Automatic Prebuilt Releases
+# =============================================
+# Save this file as:  .github/workflows/build.yml
+#
+# HOW IT WORKS:
+#   1. Create a GitHub repo and push these files to it:
+#        download_manager.py
+#        .github/workflows/build.yml
+#   2. Go to repo → Actions tab → the workflow runs automatically
+#      (or: "Build Releases" → "Run workflow" for a manual build)
+#   3. Finished executables appear under "Artifacts" on the run page:
+#        DownloadManager-Windows.zip
+#        DownloadManager-macOS.zip
+#        DownloadManager-Linux.zip
+#   4. Tag a version to also publish a public Release page:
+#        git tag v1.0.0 && git push origin v1.0.0
+#      → binaries attach to github.com/YOU/REPO/releases
+#
+# Anyone then downloads the ready-made zip from Releases — no build,
+# no Python, no PyInstaller. True "download and go".
 
-name: CI
+name: Build Releases
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags: ["v*"]          # builds a Release on every version tag
+  workflow_dispatch:      # manual "Run workflow" button in the Actions tab
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: DownloadManager-Windows
+          - os: macos-latest
+            artifact: DownloadManager-macOS
+          - os: ubuntu-latest
+            artifact: DownloadManager-Linux
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.artifact }})
+
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Install dependencies
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          python -m pip install --upgrade pip
+          pip install pyinstaller yt-dlp requests
+
+      - name: Install FFmpeg (needed for mp3 conversion + stream merging)
+        shell: bash
+        run: |
+          mkdir ffmpeg_bin
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+            unzip -o ffmpeg.zip -d ffmpeg_tmp
+            find ffmpeg_tmp -name "ffmpeg.exe" -exec cp {} ffmpeg_bin/ \;
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install ffmpeg
+            cp "$(brew --prefix ffmpeg)/bin/ffmpeg" ffmpeg_bin/
+          else
+            curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+            tar -xf ffmpeg.tar.xz
+            find . -maxdepth 2 -name "ffmpeg" -type f -exec cp {} ffmpeg_bin/ \;
+          fi
+
+      - name: Build executable
+        shell: bash
+        run: |
+          pyinstaller \
+            --name DownloadManager \
+            --onedir \
+            --windowed \
+            --collect-all yt_dlp \
+            --hidden-import yt_dlp.extractor \
+            --add-binary "ffmpeg_bin${{ runner.os == 'Windows' && '/ffmpeg.exe' || '/ffmpeg' }}:." \
+            download_manager.py
+
+      - name: Make executable runnable on unix
+        if: runner.os != 'Windows'
+        run: chmod +x dist/DownloadManager/DownloadManager
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          cd dist
+          zip -r "../${{ matrix.artifact }}.zip" DownloadManager
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+          retention-days: 90
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Attach binaries to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
