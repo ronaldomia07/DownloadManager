@@ -1,10 +1,13 @@
-# GitHub Actions — Automatic Prebuilt Releases (v3, packaging fixed)
-# ===================================================================
+# GitHub Actions — Automatic Prebuilt Releases (v4, release perms fixed)
+# =======================================================================
 # Save as:  .github/workflows/build.yml
 #
-# Fix vs v2: Windows has no `zip` command in Git Bash — packaging now
-# uses PowerShell Compress-Archive on Windows and zip on macOS/Linux.
-# (The PyInstaller build itself already succeeded on Windows.)
+# Fix vs v3: the `release` job failed with "Resource not accessible by
+# integration" because the default GITHUB_TOKEN is read-only. The
+# `permissions: contents: write` block below grants it the right to
+# create releases and upload binaries.
+#
+# Everything else already works: all 3 platform builds + packaging ✓
 
 name: Build Releases
 
@@ -12,6 +15,9 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write        # ← REQUIRED: allows creating Releases & uploading files
 
 jobs:
   build:
@@ -85,7 +91,6 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x dist/DownloadManager/DownloadManager
 
-      # Windows: zip is unavailable in Git Bash → use PowerShell instead
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -110,6 +115,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write     # also scoped explicitly to this job
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
