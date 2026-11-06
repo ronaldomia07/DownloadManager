@@ -1,24 +1,10 @@
-# GitHub Actions — Automatic Prebuilt Releases (v2, Windows-fixed)
-# =================================================================
+# GitHub Actions — Automatic Prebuilt Releases (v3, packaging fixed)
+# ===================================================================
 # Save as:  .github/workflows/build.yml
 #
-# Fixes vs v1:
-#   • Uses `python -m PyInstaller` (exit 127 on Windows was caused by
-#     `pyinstaller` not being on the Git-Bash PATH)
-#   • Correct --add-binary separator per OS (`;` on Windows, `:` on
-#     Linux/macOS) — FFmpeg now bundles correctly on all platforms
-#   • FFmpeg binary path computed once into an env var
-#
-# Note on the annotations you saw:
-#   • "Node.js 20 deprecated" — harmless: GitHub auto-forces the
-#     actions to Node 24; nothing to change.
-#   • "ubuntu-latest migrates to Ubuntu 26" — informational only.
-#   • "macOS arm64 queue times" — just runner capacity, retries help.
-#
-# Usage:
-#   1. Push this file + download_manager.py to your repo
-#   2. Actions tab → build runs (or "Run workflow" manually)
-#   3. Download zips from the run's Artifacts, or tag v* for a Release
+# Fix vs v2: Windows has no `zip` command in Git Bash — packaging now
+# uses PowerShell Compress-Archive on Windows and zip on macOS/Linux.
+# (The PyInstaller build itself already succeeded on Windows.)
 
 name: Build Releases
 
@@ -99,7 +85,15 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x dist/DownloadManager/DownloadManager
 
-      - name: Package artifact
+      # Windows: zip is unavailable in Git Bash → use PowerShell instead
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/DownloadManager -DestinationPath ${{ matrix.artifact }}.zip -Force
+
+      - name: Package artifact (macOS/Linux)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd dist
